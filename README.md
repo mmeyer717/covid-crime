@@ -7,5 +7,6 @@ and is still in progress.
 
 # Directories
 **model**: contains the scripts used to generate our regression model analyses
+
 **data-cleaning**: contains the scripts used to collect and clean the data we used
 
