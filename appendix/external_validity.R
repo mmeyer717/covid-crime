@@ -1,11 +1,11 @@
 library(readxl)
 library(ggplot2)
 
-All_70_UCR <- read_excel("C:/Users/meyer/Downloads/Boxplot Data Used.xlsx",
+All_70_UCR <- read_excel("Boxplot Data Used.xlsx",
                          sheet = "All 70 UCR Cities")
-UCR_data_our_cities.allcrime <- read_excel("C:/Users/meyer/Downloads/Boxplot Data Used.xlsx",
+UCR_data_our_cities.allcrime <- read_excel("Boxplot Data Used.xlsx",
                                            sheet = "UCR Data, Our Cities")
-Our_cities_our_data.allcrime <- read_excel("C:/Users/meyer/Downloads/Boxplot Data Used.xlsx",
+Our_cities_our_data.allcrime <- read_excel("Boxplot Data Used.xlsx",
                                            sheet = "Our cities, our data")
 
 data_sets <- c(rep("UCR Top 70", nrow(All_70_UCR)),
