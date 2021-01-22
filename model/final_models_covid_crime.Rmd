@@ -1,0 +1,838 @@
+---
+title: "Final Models for Paper"
+author: "Mikaela Meyer"
+date: "1/22/2021"
+output: html_document
+---
+
+This document will contain the final models we intend to use for our paper.
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(readxl)
+library(knitr)
+library(miceadds)
+library(aods3)
+library(car)
+library(tidyverse)
+library(ggplot2)
+library(grid)
+library(ggDiagnose)
+library(gridExtra)
+```
+
+```{r, echo = FALSE}
+# all crime: 2018-2020
+crime_1820 <- read_excel("crime_3yrs.xlsx")
+# remove first and last week of the year since they do not
+# fall into any month by our categorization
+crime_1820_df <- crime_1820[!(crime_1820$Week_Group == "0"),]
+crime_1820_df$Year <- as.factor(crime_1820_df$Year)
+
+# Remove weeks greater than week 38 for 2020
+crime_1820_df <- crime_1820_df %>% filter(Week <= 38 | Year != "2020")
+
+# Create new response variables
+crime_1820_df$Homicide_avg_byPop <- (crime_1820_df$Homicide_avg*52*100000)/crime_1820_df$Population
+crime_1820_df$Homicide_diff_byPop <- (100000*crime_1820_df$Homicide*52)/crime_1820_df$Population - crime_1820_df$Homicide_avg_byPop
+
+crime_1820_df$Robbery_avg_byPop <- (crime_1820_df$Robbery_avg*52*100000)/crime_1820_df$Population
+crime_1820_df$Robbery_diff_byPop <- (100000*crime_1820_df$Robbery*52)/crime_1820_df$Population - crime_1820_df$Robbery_avg_byPop
+
+crime_1820_df$Burglary_avg_byPop <- (crime_1820_df$`Burglary All_avg`*52*100000)/crime_1820_df$Population
+crime_1820_df$Burglary_diff_byPop <- (100000*crime_1820_df$`Burglary All`*52)/crime_1820_df$Population - crime_1820_df$Burglary_avg_byPop
+
+crime_1820_df$Auto_avg_byPop <- (crime_1820_df$`Auto Theft_avg`*52*100000)/crime_1820_df$Population
+crime_1820_df$Auto_diff_byPop <- (100000*crime_1820_df$`Auto Theft`*52)/crime_1820_df$Population - crime_1820_df$Auto_avg_byPop
+
+crime_1820_df$Larceny_avg_byPop <- (crime_1820_df$Larceny_avg*52*100000)/crime_1820_df$Population
+crime_1820_df$Larceny_diff_byPop <- (100000*crime_1820_df$Larceny*52)/crime_1820_df$Population - crime_1820_df$Larceny_avg_byPop
+
+### aggravated assault results for discussion section
+
+# crime_1820_df$AggAssault_avg_byPop <- (crime_1820_df$`Aggravated Assault_avg`*52*100000)/crime_1820_df$Population
+# crime_1820_df$AggAssault_diff_byPop <- (100000*crime_1820_df$`Aggravated Assault`*52)/crime_1820_df$Population - crime_1820_df$AggAssault_avg_byPop
+
+# Filter out cities that aren't in top 70
+crime_1820_df <- crime_1820_df %>% 
+  filter(!City %in% c("Baton Rouge", "Chattanooga",
+                      "Gainesville", "Hartford",
+                      "Tacoma", "Tempe"))
+
+# Remove first 11 weeks of 2019 for Kansas City due to the
+# data being unavailable
+crime_1820_df <- crime_1820_df %>% filter(!(City == "Kansas City" & Week %in% 1:11 & Year == "2019"))
+
+# Clean Closeness index to make openness index
+crime_1820_df <- mutate(crime_1820_df, 
+                        Openness_Index =
+                          abs(Closeness_Index - 14))
+```
+
+```{r,echo=FALSE}
+# Diagnostic Plots Function
+multi_panel_diag <- function(lm.out, plot_choice_vec,save="no",filename="NA"){
+  my_df <- dfCompile(lm.out)
+  ii <- 1
+  if(plot_choice_vec==c("all")){
+    plot_choice_vec <- c("qq","std","stud","lev","Cook","CookvLev")
+  }
+  
+  my_list <- vector("list",length(plot_choice_vec))
+  
+  if("qq" %in% plot_choice_vec){
+    qqplot <- ggDiagnose(lm.out,which=2, return = T, show.plot = F)[[2]]$qqnorm
+    my_list[[ii]] <- qqplot
+    ii <- ii + 1
+  }
+  if("std" %in% plot_choice_vec){
+    stdplot <- ggplot(my_df,aes(x=.yhat, y=.std.resid))+geom_point()+
+      geom_hline(yintercept=-2,color="red",linetype="dashed")+
+      geom_hline(yintercept=0)+geom_hline(yintercept=2, color="red",
+                                          linetype="dashed")+
+      labs(title = "Std. Res vs Fit Vals", x = "Fitted Values", 
+           y = "Std. Residuals")
+    my_list[[ii]] <- stdplot
+    ii <- ii+1
+  }
+  if("stud" %in% plot_choice_vec){
+    my_df$.student.resid <- rstudent(lm.out)
+    studplot <- ggplot(my_df,aes(x=.yhat,y=.student.resid))+geom_point()+ 
+      geom_hline(yintercept=-2,color="red",linetype="dashed")+
+      geom_hline(yintercept=0)+geom_hline(yintercept=2,color="red",
+                                          linetype="dashed")+
+      labs(title = "Stud. Res vs Fit",x="Fitted Values",
+           y = "Studentized Residuals")
+    my_list[[ii]] <- studplot
+    ii <- ii + 1
+  }
+  if("lev" %in% plot_choice_vec){
+    lev <- ggplot(my_df, aes(x=.index,y=.leverage))+geom_point()+
+      labs(title="Leverage vs. Index",x="Index",y="Leverage")
+    my_list[[ii]] <- lev
+    ii <- ii + 1
+  }
+  if("Cook" %in% plot_choice_vec){
+    cook <- ggDiagnose(lm.out,which = 4, return = T, show.plot = F)[[2]]$cooks
+    my_list[[ii]] <- cook
+    ii <- ii + 1
+  }
+  if("CookvLev" %in% plot_choice_vec){
+    cook_v_lev <- ggDiagnose(lm.out,which=6,
+                             return=T,
+                             show.plot = F)[[2]]$cooks.vs.logit.leverage+labs(title="Cook's Dist v. Lev")
+    my_list[[ii]] <- cook_v_lev
+    ii <- ii + 1
+  }
+  ncol <- ifelse(length(my_list)==1,1,ifelse(length(my_list)==2,
+                 2,ifelse(length(my_list)==3,3,ifelse(length(my_list)==4,2,3))))
+  grid.arrange(grobs=my_list,ncol=ncol)
+  if(save=="yes"){
+    save_obj <- arrangeGrob(grobs=my_list,ncol=ncol)
+    ggsave(file=paste(filename,".jpg"),save_obj)
+  }
+}
+```
+
+```{r, echo = FALSE}
+# Create new variable: 2020 flag to be used in interactions for month model
+crime_1820_df$Year_2020 <- ifelse(crime_1820_df$Year == "2020", 1, 0)
+crime_1820_df$Month <- as.factor(crime_1820_df$Month) #Otherwise, the first month isn't absorbed
+
+#create data frame for openness index and biweekly lockdown models; stops at week 21
+crime_openness <- crime_1820_df %>% filter(Week < min(Week[Surge_Protest_Week == 1]) | Year != "2020") 
+
+#create data frame for openness index; these cities do
+#not have openness index data available
+crime_openness_idx <- crime_openness %>% filter(!City %in% c("Tulsa", "Mesa",
+                                                         "Raleigh", "Milwaukee",
+                                                         "Saint Paul"))
+```
+
+### Homicide 
+
+#### Seasonal Crime Rate
+
+```{r}
+hom_seasonal <- lm.cluster(data = crime_1820_df, formula = `Homicide_diff_byPop` ~ Year + Month + Year_2020*Month, cluster = 'City')
+
+summary(hom_seasonal)
+```
+
+##### Results Plot (Fig. 1)
+
+```{r, echo=FALSE}
+#' Create data frame of desired results from clustered regression model
+#'
+#' @param mylm the clustered regression model object
+#' @param myavg the 2018 average crime rate
+#' @param sigvec a vector of "yes" and "no" that tells whether each main
+#' effect coefficient is significant at alpha = 0.05 level
+#' @param sig2020vec a vector of "yes" and "no" that tells whether each 
+#' 2020 interaction term is significant at alpha = 0.05 level
+#'
+#' @return res_df, which has columns for the month number, the coefficients of interest,
+#' their standard errors, and whether they're significant; each row is a month
+#'
+#' 
+
+create_res_df <- function(mylm, myavg, sigvec, sig2020vec){
+  std_errors <- diag(sqrt(vcov(mylm)))
+  res_df <- data.frame("MonthNum" = c(2:12), "Coef" = 
+                         coef(mylm)[c(7:14, 4:6)],
+                       "CoefSE" = std_errors[c(7:14, 4:6)],
+                       "Coef2020" = coef(mylm)[c(19:26, 16:18)],
+                       "Coef2020SE" = c(std_errors[15:22], NA, NA, NA),
+                       "Value" = myavg + coef(mylm)[c(7:14, 4:6)],
+                       "Value2020" = myavg + coef(mylm)[c(7:14, 4:6)] + 
+                         coef(mylm)[c(19:26, 16:18)],
+                       "Sig0.05" = sigvec,
+                       "Sig0.052020" = sig2020vec)
+  return(res_df)
+}
+
+#' Create data frame that contains all necessary components for monthly 
+#' model ggplots
+#'
+#' @param res_df a data frame created by `create_res_df` function
+#'
+#' @return a data frame that has duplicate rows for each month;
+#' one month contains the plotting info for the main month effect, 
+#' while the other contains the plotting info for the 2020 month interaction effect
+
+create_graph_df <- function(res_df){
+  graph_df1 <- res_df %>% select(MonthNum, Value, Value2020,
+                                          CoefSE, Coef2020SE) %>%
+    pivot_longer(cols = c(Value, Value2020), names_to = "Name", 
+                 values_to = "CrimeRate")
+  graph_df2 <- res_df %>% select(MonthNum, Sig0.05, Sig0.052020,
+                                          CoefSE, Coef2020SE) %>%
+  pivot_longer(cols = c(Sig0.05, Sig0.052020), names_to = "Significance",
+               values_to = "Significant")
+  graph_df <- cbind(graph_df1, graph_df2[,-c(1:3)]) #remove duplicate columns
+  graph_df <- graph_df %>% mutate(Month = recode_factor(
+    MonthNum, `1` = "Jan.",
+    `2` = "Feb.",
+    `3` = "Mar.",
+    `4` = "Apr.",
+    `5` = "May",
+    `6` = "Jun.",
+    `7` = "Jul.",
+    `8` = "Aug.",
+    `9` = "Sep.",
+    `10` = "Oct.",
+    `11` = "Nov.",
+    `12` = "Dec.")
+  )
+  graph_df$UpperBd <- ifelse(graph_df$Name == "Value2020",
+                               graph_df$CrimeRate + 
+                                 (1.96*graph_df$Coef2020SE),
+                               NA)
+  graph_df$LowerBd <- ifelse(graph_df$Name == "Value2020",
+                               graph_df$CrimeRate - 
+                                 (1.96*graph_df$Coef2020SE),
+                               NA)
+  return(graph_df)
+}
+
+#' Function to create the monthly model results graph
+#'
+#' @param graph_df a dataframe produced by `create_graph_df` function
+#' @param myavg the average across January of each year; to be plotted as dotted black line
+#' @param mymonths a vector of abbreviations for months to appear on the axis
+#'
+#' @return a ggplot object that is the plot we desire for monthly model results
+
+create_month_res_graph <- function(graph_df, myavg, mymonths){
+  res_graph <- ggplot(graph_df, aes(x = MonthNum, y = CrimeRate)) +
+    geom_line(aes(color = Name)) +
+    geom_errorbar(graph_df, mapping = aes(x = MonthNum,
+                                            y = CrimeRate,
+                                            ymax = UpperBd, 
+                                            ymin = LowerBd),
+                color = "dark orange") +
+    geom_point(aes(color = Name, shape = Name), size = 2) + 
+    geom_hline(yintercept=myavg, linetype = "dotted") +
+    scale_shape_manual(values=c(16, 17), na.translate = FALSE,
+                       name = "Seasonal Trend", labels =
+                           c("Avg.", "2020")) + 
+    labs(x = "Month") +
+    scale_x_continuous(breaks = seq(2, 12, 2), labels = mymonths) +
+    scale_color_manual(values = c("blue", "dark orange"), 
+                       name = "Seasonal Trend", labels =
+                           c("Avg.", "2020"))
+  return(res_graph)
+}
+
+#Values that will be necessary for all graphs
+mymonths <- c("Feb.", "Apr.", "Jun.", "Aug.", "Oct.", "Dec.")
+text_lockdown <- textGrob("Lockdowns\nbegin", gp = gpar(fontsize = 8,
+                                                        fontface = "bold",
+                                                        col = "red"))
+text_protest <- textGrob("Protests\nbegin", gp = gpar(fontsize = 8, 
+                                                      fontface = "bold",                                                      col = "red"))
+```
+
+```{r,echo=FALSE}
+sig_hom = c("No", "No", "No", "Yes", "Yes", "Yes", "Yes", "No", "No", "No", 
+            "No")
+sig_hom2020 = c("No", "No", "No", "No", "Yes", "No", "No", "No", NA, NA, NA)
+hom_jan_mean <- mean(crime_1820_df$Homicide_avg_byPop[
+  crime_1820_df$Month == 1])
+
+hom_result_df <- create_res_df(hom_seasonal, 
+                                    hom_jan_mean, sig_hom, sig_hom2020)
+
+hom_graph_df <- create_graph_df(hom_result_df)
+
+hom_month_graph <- create_month_res_graph(hom_graph_df, 
+                                          hom_jan_mean, mymonths) +
+  labs(x = "Month", y = "Homicide Rate per 100K People", 
+       title = "Homicide Rate by Month") +
+  theme(plot.title = element_text(hjust = 0.5), 
+        plot.margin = unit(c(1,1,2,1), "lines")) +
+  ylim(0, 45) + annotation_custom(text_lockdown, xmin = 3.75, xmax = 3.75, 
+                    ymin = -12, ymax = -12) +
+  annotation_custom(text_protest, xmin = 6, xmax = 6,
+                    ymin = -12, ymax = -12) + 
+  annotation_custom(segmentsGrob(gp = gpar(col = 
+                                             "red", lwd = 2)), 
+        xmin=3.75, xmax=3.75,ymin=-3, ymax=-1.75) +
+  annotation_custom(segmentsGrob(gp = gpar(col = 
+                                             "red",
+                                           lwd = 2)),
+                    xmin = 6, xmax = 6, ymin = -3,
+                    ymax = -1.75) +
+  coord_cartesian(clip = "off")
+
+hom_month_graph
+```
+
+##### Diagnostics
+
+```{r,echo=FALSE}
+hom_seasonal_lm <- lm(data = crime_1820_df, formula=`Homicide_diff_byPop`  ~ Year + Month + Year_2020*Month)
+
+multi_panel_diag(hom_seasonal_lm, "all")
+```
+
+#### Biweekly Lockdown Model
+
+```{r}
+hom_biweek <- lm.cluster(data=crime_openness, Homicide_diff_byPop ~ Year + Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` + `LD_5/6` + `LD_7/8` + `LD_9/10`,
+                              cluster = 'City')
+
+summary(hom_biweek)
+```
+
+##### Diagnostics
+
+```{r,echo=FALSE}
+hom_biweek_lm <- lm(data = crime_openness, formula=Homicide_diff_byPop ~ Year + Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` + `LD_5/6` + `LD_7/8` + `LD_9/10`)
+
+multi_panel_diag(hom_biweek_lm, "all")
+```
+
+##### Results Plot (Fig. 2)
+
+```{r,echo=FALSE}
+hom_open_std_errors <- diag(sqrt(vcov(hom_biweek)))
+hom_open_graph_df <- data.frame("BiweekVar" = c("-1/0", "1/2",
+                                                "3/4", "5/6",
+                                                "7/8", "9/10"),
+                                "Coef" = coef(hom_biweek)[15:20],
+                                "Upper" = coef(hom_biweek)[15:20] +
+                                  (1.96*hom_open_std_errors[15:20]),
+                                "Lower" = coef(hom_biweek)[15:20] -
+                                  (1.96*hom_open_std_errors[15:20]))
+
+ggplot(hom_open_graph_df, aes(x = BiweekVar, y = Coef)) +
+  geom_point(color = "dark green") + geom_errorbar(aes(ymin = Lower,
+                                             ymax = Upper), color = "dark green") +
+  labs(x = "Weeks since Lockdown", y = "Lockdown Impact",
+       title = "Homicide Biweekly Lockdown Indicator Model Results") +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  theme(plot.title = element_text(hjust = 0.5)) + ylim(-15, 15)
+```
+
+#### Openness Index Model
+
+```{r}
+hom_openness_idx <- lm.cluster(data=crime_openness_idx, Homicide_diff_byPop ~ Year + Month + Openness_Index, cluster = 'City')
+
+summary(hom_openness_idx)
+```
+
+##### Diagnostics
+
+```{r,echo=FALSE}
+hom_openness_idx_lm <- lm(data = crime_openness_idx, formula=Homicide_diff_byPop ~ Year + Month + Openness_Index)
+
+multi_panel_diag(hom_openness_idx_lm, "all")
+```
+
+### Burglary
+
+#### Seasonal Crime Rates
+
+```{r}
+burg_seasonal <- lm.cluster(data = crime_1820_df, formula = Burglary_diff_byPop ~ Year + Month +
+                                    Year_2020*Month, cluster = 'City')
+
+summary(burg_seasonal)
+```
+
+##### Diagnostics 
+
+```{r,echo=FALSE}
+burg_seasonal_lm <- lm(data = crime_1820_df, formula=Burglary_diff_byPop ~ Year + Month + Year_2020*Month)
+
+multi_panel_diag(burg_seasonal_lm, "all")
+```
+
+##### Results Plot (Fig. 3)
+
+```{r, echo=FALSE}
+burg_jan_mean <- mean(crime_1820_df$Burglary_avg_byPop[crime_1820_df$Month == 1])
+sig_burg = c("Yes", "Yes", "No", "Yes", "No", "Yes", "Yes", "No", "No", "No", "No")
+sig_burg2020 = c("No", "No", "No", "No", "Yes", "No", "No", "No", NA, NA, NA)
+
+burg_result_df <- create_res_df(burg_seasonal, 
+                                    burg_jan_mean, sig_burg, sig_burg2020)
+
+burg_graph_df <- create_graph_df(burg_result_df)
+
+burg_month_graph <- create_month_res_graph(burg_graph_df,
+                                          burg_jan_mean,
+                                          mymonths) + 
+  labs(y = "Burglary Rate per 100K People", 
+       title = "Burglary Rate by Month") + 
+  theme(plot.title = element_text(hjust = 0.5)) + ylim(500, 925) +
+  annotation_custom(text_lockdown, xmin = 3.75, xmax = 3.75, 
+                    ymin = 435, ymax = 435) +
+  annotation_custom(text_protest, xmin = 6, xmax = 6,
+                    ymin = 435, ymax = 435) + 
+  annotation_custom(segmentsGrob(gp = gpar(col = 
+                                             "red", lwd = 2)), 
+        xmin=3.75, xmax=3.75,ymin=475, ymax=485) +
+  annotation_custom(segmentsGrob(gp = gpar(col = 
+                                             "red",
+                                           lwd = 2)),
+                    xmin = 6, xmax = 6, ymin = 475,
+                    ymax = 485) +
+  coord_cartesian(clip = "off")
+
+burg_month_graph
+```
+
+#### Biweekly Lockdown Model
+
+```{r}
+burg_biweek <- lm.cluster(data=crime_openness, Burglary_diff_byPop ~ Year + Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` + `LD_5/6` + `LD_7/8` + `LD_9/10`,
+                               cluster = 'City')
+
+summary(burg_biweek)
+```
+
+##### Diagnostics
+
+```{r,echo=FALSE}
+burg_biweek_lm <- lm(data = crime_openness, formula=Burglary_diff_byPop ~ Year + Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` + `LD_5/6` + `LD_7/8` + `LD_9/10`)
+
+multi_panel_diag(burg_biweek_lm, "all")
+```
+
+##### Results Plot (Fig. 4)
+
+```{r,echo = FALSE}
+burg_open_std_errors <- diag(sqrt(vcov(burg_biweek)))
+burg_open_graph_df <- data.frame("BiweekVar" = c("-1/0", "1/2",
+                                                "3/4", "5/6",
+                                                "7/8", "9/10"),
+                                "Coef" = coef(burg_biweek)[15:20],
+                                "Upper" = coef(burg_biweek)[15:20] +
+                                  (1.96*burg_open_std_errors[15:20]),
+                                "Lower" = coef(burg_biweek)[15:20] -
+                                  (1.96*burg_open_std_errors[15:20]))
+
+ggplot(burg_open_graph_df, aes(x = BiweekVar, y = Coef)) +
+  geom_point(color = "dark green") + geom_errorbar(aes(ymin = Lower,
+                                             ymax = Upper), color = "dark green") +
+  labs(x = "Weeks since Lockdown", y = "Lockdown Impact",
+       title = "Burglary Biweekly Lockdown Indicator Model Results") +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  theme(plot.title = element_text(hjust = 0.5)) + ylim(-200, 1000)
+```
+
+#### Openness Index Model
+
+```{r}
+burg_openness_idx <- lm.cluster(data=crime_openness_idx, Burglary_diff_byPop ~ Year + Month + Openness_Index, cluster = 'City')
+
+summary(burg_openness_idx)
+```
+
+##### Diagnostics
+
+```{r,echo=FALSE}
+burg_openness_idx_lm <- lm(data = crime_openness_idx, formula=Burglary_diff_byPop ~ Year + Month + Openness_Index)
+
+multi_panel_diag(burg_openness_idx_lm, "all")
+```
+
+### Auto Theft
+
+#### Seasonal Crime Trends
+
+```{r}
+auto_seasonal <- lm.cluster(data = crime_1820_df, formula = Auto_diff_byPop ~ Year + Month +
+                                    Year_2020*Month, cluster = 'City')
+
+summary(auto_seasonal)
+```
+
+##### Diagnostics 
+
+```{r,echo=FALSE}
+auto_seasonal_lm <- lm(data = crime_1820_df, formula=Auto_diff_byPop ~ Year + Month + Year_2020*Month)
+
+multi_panel_diag(auto_seasonal_lm, "all")
+```
+
+##### Results Plot (Fig. 5)
+
+```{r,echo=FALSE}
+auto_jan_mean <- mean(crime_1820_df$Auto_avg_byPop[crime_1820_df$Month == 1])
+sig_auto = c("Yes", "Yes", "Yes", "No", "No", "No", "No", "No", "No", "No", "No")
+sig_auto2020 = c("No", "No", "No", "No", "Yes", "Yes", "Yes", "Yes", NA, NA, NA)
+
+auto_result_df <- create_res_df(auto_seasonal, 
+                                    auto_jan_mean, sig_auto, sig_auto2020)
+
+auto_graph_df <- create_graph_df(auto_result_df)
+
+auto_month_graph <- create_month_res_graph(auto_graph_df,
+                                          auto_jan_mean,
+                                          mymonths) + 
+  labs(y = "Auto Theft Rate per 100K People", 
+       title = "Auto Theft Rate by Month") + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  ylim(375, 800) +
+  annotation_custom(text_lockdown, xmin = 3.75, xmax = 3.75, 
+                    ymin = 310, ymax = 310) +
+  annotation_custom(text_protest, xmin = 6, xmax = 6,
+                    ymin = 310, ymax = 310) + 
+  annotation_custom(segmentsGrob(gp = gpar(col = 
+                                             "red", lwd = 2)), 
+        xmin=3.75, xmax=3.75,ymin=345, ymax=360) +
+  annotation_custom(segmentsGrob(gp = gpar(col = 
+                                             "red",
+                                           lwd = 2)),
+                    xmin = 6, xmax = 6, ymin = 345,
+                    ymax = 360) +
+  coord_cartesian(clip = "off")
+
+auto_month_graph
+```
+
+#### Biweekly Lockdown Model
+
+```{r}
+auto_biweek <- lm.cluster(data=crime_openness, Auto_diff_byPop ~ Year + Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` + `LD_5/6` + `LD_7/8` + `LD_9/10`, cluster = 'City')
+
+summary(auto_biweek)
+```
+
+##### Diagnostics
+
+```{r,echo=FALSE}
+auto_biweek_lm <- lm(data = crime_openness, formula=Auto_diff_byPop ~ Year + Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` + `LD_5/6` + `LD_7/8` + `LD_9/10`)
+
+multi_panel_diag(auto_biweek_lm, "all")
+```
+
+##### Results Plot (Fig. 6)
+
+```{r,echo = FALSE}
+auto_open_std_errors <- diag(sqrt(vcov(auto_biweek)))
+auto_open_graph_df <- data.frame("BiweekVar" = c("-1/0", "1/2",
+                                                "3/4", "5/6",
+                                                "7/8", "9/10"),
+                                "Coef" = coef(auto_biweek)[15:20],
+                                "Upper" = coef(auto_biweek)[15:20] +
+                                  (1.96*auto_open_std_errors[15:20]),
+                                "Lower" = coef(auto_biweek)[15:20] -
+                                  (1.96*auto_open_std_errors[15:20]))
+
+ggplot(auto_open_graph_df, aes(x = BiweekVar, y = Coef)) +
+  geom_point(color = "dark green") + geom_errorbar(aes(ymin = Lower,
+                                             ymax = Upper), color = "dark green") +
+  labs(x = "Weeks since Lockdown", y = "Lockdown Impact",
+       title = "Auto Theft Biweekly Lockdown Indicator Model Results") +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+    ylim(-100, 250)
+```
+
+#### Openness Index Model
+
+```{r}
+auto_openness_idx <- lm.cluster(data=crime_openness_idx, Auto_diff_byPop ~ Year + Month + Openness_Index, cluster = 'City')
+
+summary(auto_openness_idx)
+```
+
+##### Diagnostics
+
+```{r,echo=FALSE}
+auto_openness_idx_lm <- lm(data = crime_openness_idx, formula=Auto_diff_byPop ~ Year + Month + Openness_Index)
+
+multi_panel_diag(auto_openness_idx_lm, "all")
+```
+
+### Robbery
+
+#### Seasonal Crime Rate
+
+```{r}
+rob_seasonal <- lm.cluster(data = crime_1820_df, formula = Robbery_diff_byPop ~ Year + Month +
+                                    Year_2020*Month, cluster = 'City')
+
+summary(rob_seasonal)
+```
+
+##### Diagnostics
+
+```{r,echo=FALSE}
+rob_seasonal_lm <- lm(data = crime_1820_df, formula=Robbery_diff_byPop ~ Year + Month + Year_2020*Month)
+
+multi_panel_diag(rob_seasonal_lm, "all")
+```
+
+##### Results Plot (Fig. 7)
+
+```{r,echo=FALSE}
+rob_jan_mean <- mean(crime_1820_df$Robbery_avg_byPop[crime_1820_df$Month == 1])
+sig_rob = c("Yes", "Yes", "Yes", "No", "No", "Yes", "Yes", "Yes", "No", "No", "No")
+sig_rob2020 = c("No", "No", "No", "Yes", "No", "Yes", "Yes", "Yes", NA, NA, NA)
+
+rob_result_df <- create_res_df(rob_seasonal, 
+                                    rob_jan_mean, sig_rob, sig_rob2020)
+
+rob_graph_df <- create_graph_df(rob_result_df)
+
+rob_month_graph <- create_month_res_graph(rob_graph_df,
+                                          rob_jan_mean,
+                                          mymonths) + 
+  labs(y = "Robbery Rate per 100K People", 
+       title = "Robbery Rate by Month") + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  ylim(175, 350) + 
+  annotation_custom(text_lockdown, xmin = 3.75, xmax = 3.75, 
+                    ymin = 148, ymax = 148) +
+  annotation_custom(text_protest, xmin = 6, xmax = 6,
+                    ymin = 148, ymax = 148) + 
+  annotation_custom(segmentsGrob(gp = gpar(col = 
+                                             "red", lwd = 2)), 
+        xmin=3.75, xmax=3.75,ymin= 162, ymax=170) +
+  annotation_custom(segmentsGrob(gp = gpar(col = 
+                                             "red",
+                                           lwd = 2)),
+                    xmin = 6, xmax = 6, ymin = 162,
+                    ymax = 170) +
+  coord_cartesian(clip = "off")
+
+rob_month_graph
+```
+
+#### Biweekly Lockdown Model
+
+```{r}
+rob_biweek <- lm.cluster(data=crime_openness, Robbery_diff_byPop ~ Year + Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` + `LD_5/6` + `LD_7/8` + `LD_9/10`,
+                              cluster = 'City')
+
+summary(rob_biweek)
+```
+
+##### Diagnostics
+
+```{r,echo=FALSE}
+rob_biweek_lm <- lm(data = crime_openness, formula=Robbery_diff_byPop ~ Year + Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` + `LD_5/6` + `LD_7/8` + `LD_9/10`)
+
+multi_panel_diag(rob_biweek_lm, "all")
+```
+
+##### Results Plot (Fig. 8)
+
+```{r, echo=FALSE}
+rob_open_std_errors <- diag(sqrt(vcov(rob_biweek)))
+rob_open_graph_df <- data.frame("BiweekVar" = c("-1/0", "1/2",
+                                                "3/4", "5/6",
+                                                "7/8", "9/10"),
+                                "Coef" = coef(rob_biweek)[15:20],
+                                "Upper" = coef(rob_biweek)[15:20] +
+                                  (1.96*rob_open_std_errors[15:20]),
+                                "Lower" = coef(rob_biweek)[15:20] -
+                                  (1.96*rob_open_std_errors[15:20]))
+
+ggplot(rob_open_graph_df, aes(x = BiweekVar, y = Coef)) +
+  geom_point(color = "dark green") + geom_errorbar(aes(ymin = Lower,
+                                             ymax = Upper), color = "dark green") +
+  labs(x = "Weeks since Lockdown", y = "Lockdown Impact",
+       title = "Robbery Biweekly Lockdown Indicator Model Results") +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  ylim(-100, 100)
+```
+
+#### Openness Index Model
+
+```{r}
+rob_openness_idx <- lm.cluster(data=crime_openness_idx, Robbery_diff_byPop ~ Year + Month + Openness_Index, cluster = 'City')
+
+summary(rob_openness_idx)
+```
+
+##### Diagnostics
+
+```{r,echo=FALSE}
+rob_openness_idx <- lm(data = crime_openness_idx, formula=Robbery_diff_byPop ~ Year + Month + Openness_Index)
+
+multi_panel_diag(rob_openness_idx, "all")
+```
+
+### Larceny
+
+#### Seasonal Crime Trends
+
+```{r}
+larceny_seasonal <- lm.cluster(data = crime_1820_df, formula = Larceny_diff_byPop ~ Year + Month +
+                                    Year_2020*Month, cluster = 'City')
+
+summary(larceny_seasonal)
+```
+
+##### Diagnostics
+
+```{r,echo=FALSE}
+larceny_seasonal_lm <- lm(data = crime_1820_df, formula=Larceny_diff_byPop ~ Year + Month + Year_2020*Month)
+
+multi_panel_diag(larceny_seasonal_lm, "all")
+```
+
+##### Results Plot (Fig. 9)
+
+```{r,echo=FALSE}
+larceny_jan_mean <- mean(crime_1820_df$Larceny_avg_byPop[crime_1820_df$Month == 1])
+sig_larceny = c("Yes", "Yes", "No", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes")
+sig_larceny2020 = c("No", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", NA, NA, NA)
+
+larceny_result_df <- create_res_df(larceny_seasonal, 
+                                    larceny_jan_mean, sig_larceny,
+                                   sig_larceny2020)
+
+larceny_graph_df <- create_graph_df(larceny_result_df)
+
+larceny_month_graph <- create_month_res_graph(larceny_graph_df,
+                                          larceny_jan_mean,
+                                          mymonths) + 
+  labs(y = "Larceny Rate per 100K People", 
+       title = "Larceny Rate by Month") + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  ylim(1500, 3500) +
+  annotation_custom(text_lockdown, xmin = 3.75, xmax = 3.75, 
+                    ymin = 1200, ymax = 1200) +
+  annotation_custom(text_protest, xmin = 6, xmax = 6,
+                    ymin = 1200, ymax = 1200) + 
+  annotation_custom(segmentsGrob(gp = gpar(col = 
+                                             "red", lwd = 2)), 
+        xmin=3.75, xmax=3.75,ymin=1350, ymax=1450) +
+  annotation_custom(segmentsGrob(gp = gpar(col = 
+                                             "red",
+                                           lwd = 2)),
+                    xmin = 6, xmax = 6, ymin = 1350,
+                    ymax = 1450) +
+  coord_cartesian(clip = "off")
+
+larceny_month_graph
+```
+
+#### Biweekly Lockdown Model
+
+```{r}
+larceny_biweek <- lm.cluster(data=crime_openness, Larceny_diff_byPop ~ Year + Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` + `LD_5/6` + `LD_7/8` + `LD_9/10`,
+                                  cluster = 'City')
+
+summary(larceny_biweek)
+```
+
+##### Diagnostics
+
+```{r,echo=FALSE}
+larceny_biweek_lm <- lm(data = crime_openness, formula=Larceny_diff_byPop ~ Year + Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` + `LD_5/6` + `LD_7/8` + `LD_9/10`)
+
+multi_panel_diag(larceny_biweek_lm, "all")
+```
+
+##### Results Plot (Fig. 10)
+
+```{r,echo=FALSE}
+larceny_open_std_errors <- diag(sqrt(vcov(larceny_biweek)))
+larceny_open_graph_df <- data.frame("BiweekVar" = c("-1/0", "1/2",
+                                                "3/4", "5/6",
+                                                "7/8", "9/10"),
+                                "Coef" = coef(larceny_biweek)[15:20],
+                                "Upper" = coef(larceny_biweek)[15:20] +
+                                  (1.96*larceny_open_std_errors[15:20]),
+                                "Lower" = coef(larceny_biweek)[15:20] -
+                                  (1.96*larceny_open_std_errors[15:20]))
+
+ggplot(larceny_open_graph_df, aes(x = BiweekVar, y = Coef)) +
+  geom_point(color = "dark green") + geom_errorbar(aes(ymin = Lower,
+                                             ymax = Upper), color = "dark green") +
+  labs(x = "Weeks since Lockdown", y = "Lockdown Impact",
+       title = "Larceny Biweekly Lockdown Indicator Model Results") +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  ylim(-1250, 250)
+```
+
+#### Openness Index Model
+
+```{r}
+larceny_openness_idx <- lm.cluster(data=crime_openness_idx, Larceny_diff_byPop ~ Year + Month + Openness_Index, cluster = 'City')
+
+summary(larceny_openness_idx)
+```
+
+##### Diagnostics
+
+```{r,echo=FALSE}
+larceny_openness_idx_lm <- lm(data = crime_openness_idx, formula=Larceny_diff_byPop ~ Year + Month + Openness_Index)
+
+multi_panel_diag(larceny_openness_idx_lm, "all")
+
+qqPlot(larceny_openness_idx_lm)
+```
+
+### For discussion: Aggravated Assault
+
+```{r}
+# agg_seasonal <- lm.cluster(data = crime_1820_df, formula = `AggAssault_diff_byPop` ~ Year + Month + Year_2020*Month, cluster = 'City')
+# 
+# summary(agg_seasonal)
+```
+
+```{r}
+# agg_openness_idx <- lm.cluster(data=crime_openness_idx, AggAssault_diff_byPop ~ Year + Month + Openness_Index, cluster = 'City')
+# 
+# summary(agg_openness_idx)
+```
+
+```{r}
+# agg_biweek <- lm.cluster(data=crime_openness, AggAssault_diff_byPop ~ Year + Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` + `LD_5/6` + `LD_7/8` + `LD_9/10`,
+#                                   cluster = 'City')
+# 
+# summary(agg_biweek)
+```
+
