@@ -1,0 +1,100 @@
+---
+title: "Aggravated Assault Results"
+author: "Mikaela Meyer"
+date: "1/15/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(readxl)
+library(knitr)
+library(miceadds)
+library(aods3)
+library(car)
+library(tidyverse)
+library(ggplot2)
+library(grid)
+library(magrittr)
+#library(ggDiagnose)
+library(gridExtra)
+library(MASS)
+library(modelr)
+```
+
+```{r, echo = FALSE}
+# all crime: 2018-2020
+crime_1820 <- read_excel("crime_3yrs.xlsx")
+# remove first and last week of the year since they do not
+# fall into any month by our categorization
+crime_1820_df <- crime_1820[!(crime_1820$Week_Group == "0"),]
+crime_1820_df$Year <- as.factor(crime_1820_df$Year)
+
+# Filter out cities that aren't in top 70
+crime_1820_df <- crime_1820_df %>% 
+  filter(!City %in% c("Baton Rouge", "Chattanooga",
+                      "Gainesville", "Hartford",
+                      "Tacoma", "Tempe", "Lincoln")) # Lincoln removed due to lack of late 2020 data
+
+# Remove first 11 weeks of 2019 for Kansas City due to the
+# data being unavailable
+crime_1820_df <- crime_1820_df %>% filter(!(City == "Kansas City" & Week %in% 1:11 & Year == "2019"))
+
+# Clean Closeness index to make openness index
+crime_1820_df <- mutate(crime_1820_df, 
+                        Openness_Index =
+                          abs(Closeness_Index - 14))
+```
+
+```{r, echo = FALSE}
+# Create new variable: 2020 flag to be used in interactions for month model
+crime_1820_df$Year_2020 <- ifelse(crime_1820_df$Year == "2020", 1, 0)
+crime_1820_df$Year_2019 <- ifelse(crime_1820_df$Year == "2019", 1, 0)
+crime_1820_df <- crime_1820_df %>% mutate("PrePandemic" = 
+                                            ifelse(Year == 2020 & Month %in% c(1, 2), 1, 0),
+                                          "Lockdown" = ifelse(Year == 2020 & Month %in% c(3,4,5), 1, 0),
+                                          "Protests" = ifelse(Year == 2020 & Month %in% c(6,7,8), 1, 0),
+                                          "End" = ifelse(Year ==2020 & Month %in% c(9:12), 1, 0))
+crime_1820_df$Month <- as.factor(crime_1820_df$Month) #Otherwise, the first month isn't absorbed
+
+#create data frame for openness index and biweekly lockdown models; stops at week 21
+crime_openness <- crime_1820_df %>% filter(Week < min(Week[Surge_Protest_Week == 1]) | Year != "2020") %>% filter(City != "Milwaukee")
+
+#create data frame for openness index; these cities do
+#not have openness index data available
+crime_openness_idx <- crime_openness %>% filter(!City %in% c("Tulsa", "Mesa",
+                                                         "Raleigh", "Milwaukee",
+                                                         "Saint Paul"))
+```
+
+### For discussion: Aggravated Assault
+
+#### Seasonal Model
+
+```{r, echo=FALSE}
+agg_seasonal_pois <- glm.cluster(`Aggravated Assault` ~ Year_2019 + Month + PrePandemic +
+                           Lockdown + Protests + End + City +
+                           offset(log(Population)), data = crime_1820_df,
+                           cluster = "City", family = "poisson")
+summary(agg_seasonal_pois)
+```
+
+#### Biweekly Lockdown Model
+
+```{r,echo=FALSE}
+agg_biweek_pois <- glm.cluster(data = crime_openness, `Aggravated Assault` ~ Year +
+                                 Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` +
+                                 `LD_5/6` + `LD_7/8` + `LD_9/10` + City +
+                                 offset(log(Population)),
+                              cluster = 'City', family = "poisson")
+summary(agg_biweek_pois)
+```
+
+#### Openness Index Model
+
+```{r, echo=FALSE}
+agg_openness_pois <- glm.cluster(data=crime_openness_idx, `Aggravated Assault` ~ Year + Month + Openness_Index + City + offset(log(Population)), cluster = 'City', family = "poisson")
+summary(agg_openness_pois)
+```
+
+
