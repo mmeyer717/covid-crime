@@ -1,7 +1,7 @@
 # covid-crime
 This repository provides the code and data for the paper
 
-> Mikaela Meyer, Ahmed Hassafy, Gina Lewis, Prasun Shrestha, Amelia M. Haviland, and Daniel S. Nagin (2021). "Changes in Crime Rates in the COVID-19 Pandemic." Forthcoming in _Statistics and Public Policy_
+> Mikaela Meyer, Ahmed Hassafy, Gina Lewis, Prasun Shrestha, Amelia M. Haviland, and Daniel S. Nagin (2022). "Changes in Crime Rates in the COVID-19 Pandemic." Forthcoming in _Statistics and Public Policy_
 
 
 # Directories
