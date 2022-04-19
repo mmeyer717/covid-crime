@@ -1,0 +1,440 @@
+---
+title: "Models for Statistics and Public Policy"
+author: "Mikaela Meyer"
+date: "2/15/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(readxl)
+library(knitr)
+library(miceadds)
+library(aods3)
+library(car)
+library(tidyverse)
+library(ggplot2)
+library(grid)
+library(magrittr)
+#library(ggDiagnose)
+library(gridExtra)
+library(MASS)
+library(modelr)
+library(ggrepel)
+```
+
+```{r, echo = FALSE}
+# all crime: 2018-2020
+crime_1820 <- read_excel("crime_3yrs.xlsx")
+# remove first and last week of the year since they do not
+# fall into any month by our categorization
+crime_1820_df <- crime_1820[!(crime_1820$Week_Group == "0"),]
+crime_1820_df$Year <- as.factor(crime_1820_df$Year)
+
+# Filter out cities that aren't in top 70
+crime_1820_df <- crime_1820_df %>% 
+  filter(!City %in% c("Baton Rouge", "Chattanooga",
+                      "Gainesville", "Hartford",
+                      "Tacoma", "Tempe", "Lincoln")) # Lincoln removed due to lack of late 2020 data
+
+# Remove first 11 weeks of 2019 for Kansas City due to the
+# data being unavailable
+crime_1820_df <- crime_1820_df %>% filter(!(City == "Kansas City" & Week %in% 1:11 & Year == "2019"))
+
+# Clean Closeness index to make openness index
+crime_1820_df <- mutate(crime_1820_df, 
+                        Openness_Index =
+                          abs(Closeness_Index - 14))
+```
+
+```{r, echo = FALSE}
+# Create new variable: 2020 flag to be used in interactions for month model
+crime_1820_df$Year_2020 <- ifelse(crime_1820_df$Year == "2020", 1, 0)
+crime_1820_df$Year_2019 <- ifelse(crime_1820_df$Year == "2019", 1, 0)
+crime_1820_df <- crime_1820_df %>% mutate("PrePandemic" = 
+                                            ifelse(Year == 2020 & Month %in% c(1, 2), 1, 0),
+                                          "Lockdown" = ifelse(Year == 2020 & Month %in% c(3,4,5), 1, 0),
+                                          "Protests" = ifelse(Year == 2020 & Month %in% c(6,7,8), 1, 0),
+                                          "End" = ifelse(Year ==2020 & Month %in% c(9:12), 1, 0))
+crime_1820_df$Month <- as.factor(crime_1820_df$Month) #Otherwise, the first month isn't absorbed
+
+#create data frame for openness index and biweekly lockdown models; stops at week 21
+crime_openness <- crime_1820_df %>% filter(Week < min(Week[Surge_Protest_Week == 1]) | Year != "2020") %>%
+  filter(City != "Milwaukee")
+
+#create data frame for openness index; these cities do
+#not have openness index data available
+crime_openness_idx <- crime_openness %>% filter(!City %in% c("Tulsa", "Mesa",
+                                                         "Raleigh", "Milwaukee",
+                                                         "Saint Paul"))
+
+hom_1820_df <- crime_1820_df %>% filter(City != "San Francisco") 
+hom_openness <- crime_1820_df %>% filter(Week < min(Week[Surge_Protest_Week == 1]) | Year != "2020") %>% filter(!City %in% c("Milwaukee", "San Francisco"))
+
+#create data frame for openness index; these cities do
+#not have openness index data available
+hom_oi <- crime_openness %>% filter(!City %in% c("Tulsa", "Mesa",
+                                                         "Raleigh", "Milwaukee",
+                                                         "Saint Paul", 
+                                                         "San Francisco"))
+```
+
+## Homicide 
+
+### Seasonal Crime Rate
+
+```{r,echo=FALSE}
+hom_seasonal_pois <- glm.cluster(Homicide ~ Year_2019 + Month + PrePandemic +
+                           Lockdown + Protests + End + City +
+                           offset(log(Population)), data = hom_1820_df,
+                           cluster = "City", family = "poisson")
+summary(hom_seasonal_pois)
+
+
+# can use below code to check dispersion parameter
+hsp_no_cluster <- glm(Homicide ~ Year_2019 + Month + PrePandemic +
+                           Lockdown + Protests + End +
+                           offset(log(Population)), data = hom_1820_df,
+                      family = "quasipoisson")
+summary(hsp_no_cluster)
+```
+
+#### Post Estimation Test
+
+```{r,echo=FALSE}
+coef_2020_diff_test <- function(crime_glm, crime_df){
+  other_2020_coef <- coef(crime_glm)[15:17]
+  prepandemic_coef <- coef(crime_glm)[14]
+  coef_diff <- other_2020_coef - prepandemic_coef
+  other_2020_var <- diag(vcov(crime_glm))[15:17]
+  prepandemic_var <- diag(vcov(crime_glm))[14]
+  all_2020_covar <- vcov(crime_glm)[15:17, "PrePandemic"]
+  var_diff <- other_2020_var + prepandemic_var - (2*all_2020_covar)
+
+  tstats_new <- coef_diff/sqrt(var_diff)
+  pvalues_new <- 2*pt(abs(tstats_new),
+                      nrow(crime_df)-length(coef(crime_glm)),
+                      lower.tail = F)
+
+  diff_result_df <- data.frame("Effect" = names(coef(crime_glm))[15:17],
+                             "DifferenceFromPre" = coef_diff,
+                             "Std. Error" = sqrt(var_diff),
+                             "t.stat" = tstats_new,
+                             "P-value" = pvalues_new)
+}
+
+diff_result_df_hom <- coef_2020_diff_test(hom_seasonal_pois, hom_1820_df)
+diff_result_df_hom
+
+coef_pair_diff_test <- function(crime_glm, idx1, idx2, crime_df){
+  first_coef <- coef(crime_glm)[idx1]
+  second_coef <- coef(crime_glm)[idx2]
+  coef_diff <- second_coef - first_coef
+  first_var <- diag(vcov(crime_glm))[idx1]
+  second_var <- diag(vcov(crime_glm))[idx2]
+  mycovar <- vcov(crime_glm)[idx1, idx2]
+  var_diff <- first_var + second_var - (2*mycovar)
+  tstats_new <- coef_diff/sqrt(var_diff)
+  pvalues_new <- 2*pt(abs(tstats_new), nrow(crime_df)-length(coef(crime_glm)),
+                      lower.tail = F)
+  diff_result_df <- data.frame("Effect" = paste0(names(coef(crime_glm))[idx1],
+                                                 names(coef(crime_glm))[idx2]),
+                             "DifferenceFromPre" = coef_diff,
+                             "Std. Error" = sqrt(var_diff),
+                             "t.stat" = tstats_new,
+                             "P-value" = pvalues_new)
+  return(diff_result_df)
+}
+
+ldsummer_diff_df_hom <- coef_pair_diff_test(hom_seasonal_pois, 15, 16, hom_1820_df)
+ldsummer_diff_df_hom
+summerend_diff_df_hom <- coef_pair_diff_test(hom_seasonal_pois, 16, 17, hom_1820_df)
+summerend_diff_df_hom
+```
+
+### Biweekly
+
+```{r, echo = FALSE}
+hom_biweek_pois <- glm.cluster(data = hom_openness, Homicide ~ Year +
+                                 Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` +
+                                 `LD_5/6` + `LD_7/8` + `LD_9/10` + City +
+                                 offset(log(Population)),
+                              cluster = 'City', family = "poisson")
+
+summary(hom_biweek_pois)
+
+hbp_no_cluster <- glm(Homicide ~ Year +
+                                 Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` +
+                                 `LD_5/6` + `LD_7/8` + `LD_9/10` +
+                           offset(log(Population)), data = hom_openness,
+                      family="quasipoisson")
+summary(hbp_no_cluster)
+```
+
+### Openness Index 
+
+```{r, echo=FALSE}
+hom_openness_pois <- glm.cluster(data=hom_oi, Homicide ~ Year + Month + Openness_Index + City + offset(log(Population)), cluster = 'City', family = "poisson")
+summary(hom_openness_pois)
+
+hop_no_cluster <- glm(data=hom_oi, Homicide ~ Year + Month + Openness_Index + offset(log(Population)), family = "quasipoisson")
+summary(hop_no_cluster)
+```
+
+## Auto Theft
+
+### Seasonal Model
+
+```{r,echo=FALSE}
+auto_seasonal_pois <- glm.cluster(data = crime_1820_df, 
+                            formula = `Auto Theft` ~ Year_2019 + Month +
+                                  PrePandemic + Lockdown + Protests + End + City +
+                              offset(log(Population)),
+                            cluster = 'City', family = "poisson")
+summary(auto_seasonal_pois)
+
+asp_no_cluster <- glm(data = crime_1820_df, 
+                            formula = `Auto Theft` ~ Year_2019 + Month +
+                                  PrePandemic + Lockdown + Protests + End +
+                              offset(log(Population)), 
+                      family = "quasipoisson")
+summary(asp_no_cluster)
+```
+
+#### Post Estimation Test
+
+```{r,echo=FALSE}
+diff_result_df_auto <- coef_2020_diff_test(auto_seasonal_pois, crime_1820_df)
+diff_result_df_auto
+
+ldsummer_diff_df_auto <- coef_pair_diff_test(auto_seasonal_pois, 15, 16, crime_1820_df)
+ldsummer_diff_df_auto
+summerend_diff_df_auto <- coef_pair_diff_test(auto_seasonal_pois, 16, 17, crime_1820_df)
+summerend_diff_df_auto
+```
+
+### Biweekly Model
+
+```{r,echo=FALSE}
+auto_biweek_pois <- glm.cluster(data = crime_openness, `Auto Theft` ~ Year +
+                                 Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` +
+                                 `LD_5/6` + `LD_7/8` + `LD_9/10` + City + 
+                                 offset(log(Population)),
+                              cluster = 'City', family = "poisson")
+
+summary(auto_biweek_pois)
+
+abp_no_cluster <- glm(data = crime_openness, `Auto Theft` ~ Year +
+                                 Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` +
+                                 `LD_5/6` + `LD_7/8` + `LD_9/10` +
+                                 offset(log(Population)),
+                      family = "quasipoisson")
+summary(abp_no_cluster)
+```
+
+### Openness Index Model
+
+```{r,echo=FALSE}
+auto_openness_pois <- glm.cluster(data=crime_openness_idx, `Auto Theft` ~ Year + Month + Openness_Index + City + offset(log(Population)), cluster = 'City',
+                                  family = "poisson")
+summary(auto_openness_pois)
+
+aop_no_cluster <- glm(data=crime_openness_idx, `Auto Theft` ~ Year + Month + Openness_Index + offset(log(Population)), family = "quasipoisson")
+summary(aop_no_cluster)
+```
+
+## Burglary
+
+### Seasonal Model
+
+```{r,echo=FALSE}
+burg_seasonal_pois <- glm.cluster(data = crime_1820_df, 
+                            formula = `Burglary All` ~ Year_2019 + Month +
+                                  PrePandemic + Lockdown + Protests + End + City + 
+                              offset(log(Population)),
+                            cluster = 'City', family = "poisson")
+summary(burg_seasonal_pois)
+bsp_no_cluster <- glm(data = crime_1820_df, 
+                            formula = `Burglary All` ~ Year_2019 + Month +
+                                  PrePandemic + Lockdown + Protests + End +
+                              offset(log(Population)),
+                      family = "quasipoisson")
+summary(bsp_no_cluster)
+```
+
+#### Post Estimation Test
+
+```{r,echo=FALSE}
+diff_result_df_burg <- coef_2020_diff_test(burg_seasonal_pois, crime_1820_df)
+diff_result_df_burg
+
+ldsummer_diff_df_burg <- coef_pair_diff_test(burg_seasonal_pois, 15, 16, crime_1820_df)
+ldsummer_diff_df_burg
+summerend_diff_df_burg <- coef_pair_diff_test(burg_seasonal_pois, 16, 17, crime_1820_df)
+summerend_diff_df_burg
+```
+
+### Biweekly Model
+
+```{r,echo=FALSE}
+burg_biweek_pois <- glm.cluster(data = crime_openness, `Burglary All` ~ Year +
+                                 Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` +
+                                 `LD_5/6` + `LD_7/8` + `LD_9/10` + City + 
+                                 offset(log(Population)),
+                              cluster = 'City', family = "poisson")
+
+summary(burg_biweek_pois)
+
+bbp_no_cluster <- glm(data = crime_openness, `Burglary All` ~ Year +
+                                 Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` +
+                                 `LD_5/6` + `LD_7/8` + `LD_9/10` +
+                                 offset(log(Population)),
+                      family = "quasipoisson")
+summary(bbp_no_cluster)
+```
+
+### Openness Index Model
+
+```{r,echo=FALSE}
+burg_openness_pois <- glm.cluster(data=crime_openness_idx, `Burglary All` ~ Year + Month + Openness_Index + City +  offset(log(Population)), cluster = 'City',
+                                  family = "poisson")
+summary(burg_openness_pois)
+
+bop_no_cluster <- glm(data=crime_openness_idx, `Burglary All` ~ Year + Month + Openness_Index + offset(log(Population)), family = "quasipoisson")
+summary(bop_no_cluster)
+```
+
+## Robbery
+
+### Seasonal Model
+
+```{r,echo=FALSE}
+rob_seasonal_pois <- glm.cluster(data = crime_1820_df, 
+                            formula = Robbery ~ Year_2019 + Month +
+                                  PrePandemic + Lockdown + Protests + End + City + 
+                              offset(log(Population)),
+                            cluster = 'City', family = "poisson")
+summary(rob_seasonal_pois)
+rsp_no_cluster <- glm(data = crime_1820_df, 
+                            formula = Robbery ~ Year_2019 + Month +
+                                  PrePandemic + Lockdown + Protests + End +
+                              offset(log(Population)),
+                      family = "quasipoisson")
+summary(rsp_no_cluster)
+```
+
+#### Post Estimation Test
+
+```{r,echo=FALSE}
+diff_result_df_rob <- coef_2020_diff_test(rob_seasonal_pois, crime_1820_df)
+diff_result_df_rob
+
+ldsummer_diff_df_rob <- coef_pair_diff_test(rob_seasonal_pois, 15, 16, crime_1820_df)
+ldsummer_diff_df_rob
+summerend_diff_df_rob <- coef_pair_diff_test(rob_seasonal_pois, 16, 17, crime_1820_df)
+summerend_diff_df_rob
+```
+
+### Biweekly Model
+
+```{r,echo=FALSE}
+rob_biweek_pois <- glm.cluster(data = crime_openness, Robbery ~ Year +
+                                 Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` +
+                                 `LD_5/6` + `LD_7/8` + `LD_9/10` + City + 
+                                 offset(log(Population)),
+                              cluster = 'City', family = "poisson")
+
+summary(rob_biweek_pois)
+
+rbp_no_cluster <- glm(data = crime_openness, Robbery ~ Year +
+                                 Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` +
+                                 `LD_5/6` + `LD_7/8` + `LD_9/10` +
+                                 offset(log(Population)),
+                      family = "quasipoisson")
+summary(rbp_no_cluster)
+```
+
+### Openness Index Model
+
+```{r,echo=FALSE}
+rob_openness_pois <- glm.cluster(data=crime_openness_idx, Robbery ~ Year + Month + Openness_Index + City + offset(log(Population)), cluster = 'City',
+                                 family = "poisson")
+summary(rob_openness_pois)
+
+rop_no_cluster <- glm(data=crime_openness_idx, Robbery ~ Year + Month + Openness_Index + offset(log(Population)), family = "quasipoisson")
+summary(rop_no_cluster)
+```
+
+### Openness Index Plot
+
+```{r,echo=FALSE}
+rob_oi_plot <- crime_openness_idx %>% filter(Year == 2020) %>% group_by(Week) %>% summarize(AvgOI = mean(Openness_Index)) %>% filter(Week >= 10)
+rob_oi_plot <- rob_oi_plot %>% mutate(OIEffect = exp(coef(rob_openness_pois)[15]*AvgOI))
+rob_oi_plot <- rob_oi_plot %>% mutate(AxisName = paste0(Week,
+                                                        "\n(",
+                                                        round(AvgOI, digits = 3), ")"))
+rob_oi_plt <- ggplot(rob_oi_plot, aes(x = Week, y = OIEffect)) + geom_point(color = "purple") + geom_line(color = "purple") +
+  labs(x = "Week and Average Openness Index Value", y = "Mult. Increase from Openness Index") + scale_x_continuous(breaks = 10:21, labels = rob_oi_plot$AxisName) + theme(axis.text.x = element_text(angle = 90))
+rob_oi_plt
+```
+
+## Larceny
+
+### Seasonal Model
+
+```{r,echo=FALSE}
+larceny_seasonal_pois <- glm.cluster(data = crime_1820_df, 
+                            formula = Larceny ~ Year_2019 + Month +
+                                  PrePandemic + Lockdown + Protests + End + City + 
+                              offset(log(Population)),
+                            cluster = 'City', family = "poisson")
+summary(larceny_seasonal_pois)
+
+lsp_no_cluster <- glm(data = crime_1820_df, 
+                            formula = Larceny ~ Year_2019 + Month +
+                                  PrePandemic + Lockdown + Protests + End +
+                              offset(log(Population)), family = "quasipoisson")
+summary(lsp_no_cluster)
+```
+
+#### Post Estimation Test
+
+```{r,echo=FALSE}
+diff_result_df_larceny <- coef_2020_diff_test(larceny_seasonal_pois, crime_1820_df)
+diff_result_df_larceny
+
+ldsummer_diff_df_larceny <- coef_pair_diff_test(larceny_seasonal_pois, 15, 16, crime_1820_df)
+ldsummer_diff_df_larceny
+summerend_diff_df_larceny <- coef_pair_diff_test(larceny_seasonal_pois, 16, 17, crime_1820_df)
+summerend_diff_df_larceny
+```
+
+### Biweekly Model
+
+```{r,echo=FALSE}
+larceny_biweek_pois <- glm.cluster(data = crime_openness, Larceny ~ Year +
+                                 Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` +
+                                 `LD_5/6` + `LD_7/8` + `LD_9/10` + City + 
+                                 offset(log(Population)),
+                              cluster = 'City', family = "poisson")
+
+summary(larceny_biweek_pois)
+
+lbp_no_cluster <- glm(data = crime_openness, Larceny ~ Year +
+                                 Month + `LD_-1/0` + `LD_1/2` + `LD_3/4` +
+                                 `LD_5/6` + `LD_7/8` + `LD_9/10` +
+                                 offset(log(Population)),
+                      family = "quasipoisson")
+summary(lbp_no_cluster)
+```
+
+### Openness Index Model
+
+```{r,echo=FALSE}
+larceny_openness_pois <- glm.cluster(data=crime_openness_idx, Larceny ~ Year + Month + Openness_Index + City + offset(log(Population)), cluster = 'City',
+                                     family = "poisson")
+summary(larceny_openness_pois)
+
+lop_no_cluster <- glm(data=crime_openness_idx, Larceny ~ Year + Month + Openness_Index + offset(log(Population)), family = "quasipoisson")
+summary(lop_no_cluster)
+```
